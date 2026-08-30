@@ -14,7 +14,21 @@ DSH（DeepSeek Harness）第三方模型兼容守卫插件，修复两个高频�
 - 推理档位降到该模型支持的最便宜档（优先 off > minimal > low，按模型 efforts 列表实际可选值挑选）；
 - 不支持思考档位的模型不会强行设置（避免 UNSUPPORTED_REASONING_EFFORT）。
 
-## 2. Error: invalid arguments: missing required property "description"
+## 2. GPT 在最高权限下仍申请提权，频繁报错（v0.1.1 新增）
+
+**根因**（官方 Discussion [#3877](https://github.com/deepseek-ai/deepseek-harness/discussions/3877)）：
+只要挂了沙箱执行器，`bash`/`write`/`edit` 的工具 schema 就会**全局**广告 `sandbox_permissions` 字段，而有效模式是按会话解析的；执行时 `approveEscalation` 要求**严格更宽**（`WIDER_MODES`：read-only→workspace-write→danger-full-access，full-access 无更宽目标）+ 非空 justification，否则 **fail-closed 整个调用失败**。GPT/Claude 等模型会投机性附加该参数，在 danger-full-access 会话里必然触发：
+
+\`\`\`text
+Error: sandbox escalation to "danger-full-access" is not strictly wider than this call's current "danger-full-access" mode
+Error: invalid justification: expected a non-empty sentence
+\`\`\`
+
+**修复**：`tools/execute` 钩子在执行前解析 `ctx.sandboxPolicy` 的当前会话模式，判定提权请求**必败**（同档/更窄/无沙箱服务/模式未知）时剥离 `sandbox_permissions`+`justification`，按当前模式执行（语义等价——模型要的本就已拥有）。**严格更宽**的合法请求保留，正常走审批流。
+
+配置 `stripEscalation`：`"redundant"`（默认，只剥必败请求）/ `"always"`（连合法提权也剥，适合禁用审批弹窗的会话）/ `"off"`。
+
+## 3. Error: invalid arguments: missing required property "description"
 
 **根因**：`bash` / `run_code` / `subagent` 等工具把 `description`（UI 标签用）声明为必填，
 参数严格校验（`dsh-tools` JSON Schema 校验）缺字段即整体拒绝。很多模型经常漏传。
@@ -39,6 +53,7 @@ DSH（DeepSeek Harness）第三方模型兼容守卫插件，修复两个高频�
   "compactionStripTools": false,
   "compactionPurposes": ["compaction"],
   "fillDescription": true,
+  "stripEscalation": "redundant",
   "logFixes": true
 }
 ```

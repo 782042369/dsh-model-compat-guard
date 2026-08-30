@@ -6,9 +6,15 @@ import { apply } from "../src/index.js";
 
 const listeners = {};
 const logs = [];
-const makeCtx = ({ modelInfo }) => ({
+const makeCtx = ({ modelInfo, standingMode = "danger-full-access" }) => ({
 	on(event, handler) {
 		listeners[event] = handler;
+	},
+	get(name) {
+		if (name === "sandboxPolicy" && standingMode !== null) {
+			return { resolve: () => ({ mode: standingMode }) };
+		}
+		return undefined;
 	},
 	logger: {
 		info: (m) => logs.push(["info", m]),
@@ -130,9 +136,58 @@ async function scenarioTools() {
 	check("tools: original frozen object untouched", frozen.description, undefined);
 }
 
+async function scenarioEscalation() {
+	delete listeners["llm/stream"]; delete listeners["tools/execute"];
+	const ctx = makeCtx({ modelInfo: {}, standingMode: "danger-full-access" });
+	apply(ctx, {});
+	const exe = listeners["tools/execute"];
+	async function run(name, args) {
+		const exec = { name, agent: { session: { id: "s1" } }, arguments: args, signal: { aborted: false } };
+		await exe(exec, () => "ok");
+		return exec;
+	}
+	let r = await run("bash", { command: "ls", description: "List", sandbox_permissions: "danger-full-access", justification: "need full access" });
+	check("esc: same-mode request stripped", "sandbox_permissions" in r.arguments, false);
+	check("esc: justification dropped with it", "justification" in r.arguments, false);
+	check("esc: other args kept", r.arguments.command, "ls");
+	r = await run("bash", { command: "ls", description: "List", sandbox_permissions: "workspace-write", justification: "narrower ask at full access" });
+	check("esc: narrower-than-current stripped", "sandbox_permissions" in r.arguments, false);
+	const ww = makeCtx({ modelInfo: {}, standingMode: "workspace-write" });
+	apply(ww, {});
+	const exeWW = listeners["tools/execute"];
+	const kept = { name: "bash", agent: { session: { id: "s" } }, arguments: { command: "ls", description: "L", sandbox_permissions: "danger-full-access", justification: "really need it" }, signal: { aborted: false } };
+	await exeWW(kept, () => "ok");
+	check("esc: strictly-wider request kept for approval flow", kept.arguments.sandbox_permissions, "danger-full-access");
+	const doomed = { name: "bash", agent: { session: { id: "s" } }, arguments: { command: "ls", description: "L", sandbox_permissions: "workspace-write", justification: "same mode" }, signal: { aborted: false } };
+	await exeWW(doomed, () => "ok");
+	check("esc: same-mode at workspace-write stripped", "sandbox_permissions" in doomed.arguments, false);
+	const nosb = makeCtx({ modelInfo: {}, standingMode: null });
+	apply(nosb, {});
+	const bare = { name: "bash", agent: { session: { id: "s" } }, arguments: { command: "ls", description: "L", sandbox_permissions: "danger-full-access" }, signal: { aborted: false } };
+	await listeners["tools/execute"](bare, () => "ok");
+	check("esc: no sandbox service mounted -> stripped", "sandbox_permissions" in bare.arguments, false);
+	const offCfg = makeCtx({ modelInfo: {}, standingMode: "danger-full-access" });
+	apply(offCfg, { stripEscalation: "off" });
+	const offExec = { name: "bash", agent: { session: { id: "s" } }, arguments: { command: "ls", description: "L", sandbox_permissions: "danger-full-access", justification: "x" }, signal: { aborted: false } };
+	await listeners["tools/execute"](offExec, () => "ok");
+	check("esc: stripEscalation off -> untouched", offExec.arguments.sandbox_permissions, "danger-full-access");
+	const alwaysCfg = makeCtx({ modelInfo: {}, standingMode: "workspace-write" });
+	apply(alwaysCfg, { stripEscalation: "always" });
+	const alwaysExec = { name: "bash", agent: { session: { id: "s" } }, arguments: { command: "ls", description: "L", sandbox_permissions: "danger-full-access", justification: "x" }, signal: { aborted: false } };
+	await listeners["tools/execute"](alwaysExec, () => "ok");
+	check("esc: always strips even strictly-wider", "sandbox_permissions" in alwaysExec.arguments, false);
+	const bothCfg = makeCtx({ modelInfo: {}, standingMode: "danger-full-access" });
+	apply(bothCfg, {});
+	const both = { name: "bash", agent: { session: { id: "s" } }, arguments: { command: "pwd", sandbox_permissions: "danger-full-access", justification: "x" }, signal: { aborted: false } };
+	await listeners["tools/execute"](both, () => "ok");
+	check("esc: combined with description fill", both.arguments.description, "Run: pwd");
+	check("esc: combined escalation stripped", "sandbox_permissions" in both.arguments, false);
+}
+
 async function main() {
 	await scenarioLlm();
 	await scenarioTools();
+	await scenarioEscalation();
 	if (failures > 0) {
 		console.error(`${failures} check(s) FAILED`);
 		process.exit(1);

@@ -49,7 +49,18 @@ const DEFAULTS = Object.freeze({
 	compactionStripTools: false,
 	compactionPurposes: Object.freeze(["compaction"]),
 	fillDescription: true,
+	stripEscalation: "redundant",
 	logFixes: true
+});
+
+/**
+ * Strict-widening lattice from dsh-sandbox approveEscalation: modes a call may
+ * escalate TO. "danger-full-access" has no wider target, so any
+ * sandbox_permissions request there is rejected fail-closed upstream.
+ */
+const WIDER_MODES = Object.freeze({
+	"read-only": Object.freeze(["workspace-write", "danger-full-access"]),
+	"workspace-write": Object.freeze(["danger-full-access"])
 });
 
 /** Lower score = cheaper reasoning; unknown ids sort last. */
@@ -196,6 +207,40 @@ function fillMissingDescription(ctx, cfg, exec) {
 	}
 }
 
+/**
+ * Strip sandbox-escalation arguments that can only fail. Non-DeepSeek models
+ * (GPT/Claude/...) attach sandbox_permissions speculatively; when the request
+ * is not strictly wider than the session's standing mode (equal, narrower,
+ * unknown, or no confining executor mounted) dsh-sandbox's approveEscalation
+ * rejects the whole call fail-closed, spamming tool errors. Stripping runs
+ * the call at the current standing mode instead — semantically what the
+ * model asked for whenever the request was redundant.
+ */
+function stripDoomedEscalation(ctx, cfg, exec) {
+	if (cfg.stripEscalation === "off") return;
+	const args = exec.arguments;
+	if (!isPlainObject(args) || args.sandbox_permissions === undefined) return;
+	if (cfg.stripEscalation !== "always") {
+		let keep = false;
+		try {
+			const policy = typeof ctx.get === "function" ? ctx.get("sandboxPolicy") : undefined;
+			if (policy !== undefined && typeof policy.resolve === "function") {
+				const standing = policy.resolve(exec.agent === undefined ? {} : { session: exec.agent.session });
+				const effective = standing?.mode;
+				keep = typeof effective === "string" && (WIDER_MODES[effective] ?? []).includes(args.sandbox_permissions);
+			}
+		} catch {
+			keep = false;
+		}
+		if (keep) return;
+	}
+	const next = { ...args };
+	delete next.sandbox_permissions;
+	if (next.justification !== undefined) delete next.justification;
+	exec.arguments = next;
+	if (cfg.logFixes) logInfo(ctx, `compat-guard: stripped doomed ${exec.name} escalation to "${String(args.sandbox_permissions)}" (redundant or unavailable; running at the standing mode)`);
+}
+
 /** Cheapest supported reasoning effort id, or undefined when untaggable. */
 function cheapestEffort(efforts) {
 	let best;
@@ -280,10 +325,17 @@ export function apply(ctx, config) {
 		return next();
 	}, { global: true, prepend: true });
 	ctx.on("tools/execute", async (exec, next) => {
-		try {
-			if (cfg.fillDescription && exec !== null && typeof exec === "object") fillMissingDescription(ctx, cfg, exec);
-		} catch (error) {
-			logWarn(ctx, `compat-guard: description fill failed: ${error?.message ?? error}`);
+		if (exec !== null && typeof exec === "object") {
+			try {
+				stripDoomedEscalation(ctx, cfg, exec);
+			} catch (error) {
+				logWarn(ctx, `compat-guard: escalation strip failed: ${error?.message ?? error}`);
+			}
+			try {
+				if (cfg.fillDescription) fillMissingDescription(ctx, cfg, exec);
+			} catch (error) {
+				logWarn(ctx, `compat-guard: description fill failed: ${error?.message ?? error}`);
+			}
 		}
 		return next();
 	});
