@@ -59,41 +59,50 @@ async function scenarioLlm() {
 	});
 	apply(ctx, {});
 	const llm = listeners["llm/stream"];
+	// Production consumes the listener's return value with `for await …of`:
+	// it must BE the AsyncIterable (for-await never unwraps a Promise), and the
+	// lazy tuning only runs once the stream is pulled. Drain like production.
+	const emptyStream = () => (async function* () {})();
+	const drain = async (stream) => {
+		for await (const chunk of stream) void chunk;
+	};
 	const opts = { purpose: "compaction", provider: "waibuzheng", model: "gpt-5.6-terra", maxTokens: 8192, messages: [], reasoningEffort: "high", tools: [{}] };
 	let nextCalled = 0;
-	await llm(opts, () => { nextCalled++; return "stream"; });
+	const ret = llm(opts, () => { nextCalled++; return emptyStream(); });
+	check("llm: returns AsyncIterable, not a Promise", typeof ret?.[Symbol.asyncIterator], "function");
+	await drain(ret);
 	check("llm: next() called once", nextCalled, 1);
 	check("llm: maxTokens raised", opts.maxTokens, 32768);
 	check("llm: effort lowered to cheapest (off)", opts.reasoningEffort, "off");
 	check("llm: tools kept by default", opts.tools.length, 1);
 	// non-compaction purpose untouched
 	const main = { purpose: undefined, provider: "p", model: "m", maxTokens: 4096 };
-	await llm(main, () => 0);
+	await drain(llm(main, () => emptyStream()));
 	check("llm: main-loop request untouched", main.maxTokens, 4096);
 	// clamped to declared defaultMaxTokens
 	const small = makeCtx({ modelInfo: { defaultMaxTokens: 12000, reasoning: { efforts: [{ id: "low" }, { id: "high" }] } } });
 	apply(small, {});
 	const opts2 = { purpose: "compaction", provider: "p", model: "m", maxTokens: 8192 };
-	await listeners["llm/stream"](opts2, () => 0);
+	await drain(listeners["llm/stream"](opts2, () => emptyStream()));
 	check("llm: maxTokens clamped to declared cap", opts2.maxTokens, 12000);
 	check("llm: cheapest without off = low", opts2.reasoningEffort, "low");
 	// model without reasoning support: effort must not be set
 	const noreason = makeCtx({ modelInfo: { defaultMaxTokens: 64000 } });
 	apply(noreason, {});
 	const opts3 = { purpose: "compaction", provider: "p", model: "m", maxTokens: 8192 };
-	await listeners["llm/stream"](opts3, () => 0);
+	await drain(listeners["llm/stream"](opts3, () => emptyStream()));
 	check("llm: no-reasoning model leaves effort unset", "reasoningEffort" in opts3, false);
 	// info lookup failure still raises maxTokens and never throws
 	const throwing = makeCtx({ modelInfo: {} });
 	apply(throwing, {});
 	const opts4 = { purpose: "compaction", provider: "p", model: "throw" };
-	await listeners["llm/stream"](opts4, () => 0);
+	await drain(listeners["llm/stream"](opts4, () => emptyStream()));
 	check("llm: lookup failure tolerated, maxTokens raised", opts4.maxTokens, 32768);
 	// config: keep effort + strip tools
 	const tuned = makeCtx({ modelInfo: { reasoning: { efforts: [{ id: "low" }] } } });
 	apply(tuned, { compactionEffort: "keep", compactionStripTools: true, compactionMaxTokens: 16384 });
 	const opts5 = { purpose: "compaction", provider: "p", model: "m", maxTokens: 8192, tools: [{}] };
-	await listeners["llm/stream"](opts5, () => 0);
+	await drain(listeners["llm/stream"](opts5, () => emptyStream()));
 	check("llm: keep leaves effort unset", "reasoningEffort" in opts5, false);
 	check("llm: stripTools empties tools", opts5.tools, []);
 	check("llm: configured maxTokens honored", opts5.maxTokens, 16384);

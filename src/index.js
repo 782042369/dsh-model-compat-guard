@@ -316,14 +316,21 @@ function logWarn(ctx, message) {
 
 export function apply(ctx, config) {
 	const cfg = normalizeConfig(config);
-	ctx.on("llm/stream", async (options, next) => {
+	// The llm/stream waterfall must return the downstream AsyncIterable itself:
+	// consumers iterate it directly (`for await …of stream`), and for-await does
+	// NOT unwrap promises — an `async` listener here returns a Promise and every
+	// model call dies with "stream is not async iterable". Stay synchronous and
+	// defer the async tuning into the returned generator (the same pattern
+	// dsh-session-checkpoint-policy uses for its checkpoint wrapper), so the
+	// options are still tuned before the adapter reads them at first pull.
+	ctx.on("llm/stream", (options, next) => (async function* () {
 		try {
 			await tuneAuxRequest(ctx, cfg, options);
 		} catch (error) {
 			logWarn(ctx, `compat-guard: llm/stream tuning failed: ${error?.message ?? error}`);
 		}
-		return next();
-	}, { global: true, prepend: true });
+		yield* next();
+	})(), { global: true, prepend: true });
 	ctx.on("tools/execute", async (exec, next) => {
 		if (exec !== null && typeof exec === "object") {
 			try {
