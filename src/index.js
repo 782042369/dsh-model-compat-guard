@@ -304,11 +304,17 @@ async function tuneAuxRequest(ctx, cfg, options) {
 
 function logInfo(ctx, message) {
 	try {
+		console.log(`[compat-guard] ${message}`);
+	} catch {}
+	try {
 		ctx.logger?.info?.(message);
 	} catch {}
 }
 
 function logWarn(ctx, message) {
+	try {
+		console.warn(`[compat-guard] ${message}`);
+	} catch {}
 	try {
 		ctx.logger?.warn?.(message);
 	} catch {}
