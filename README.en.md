@@ -1,4 +1,4 @@
-# dsh-compat-guard
+# dsh-model-compat-guard
 
 [中文文档](README.md)
 
@@ -82,13 +82,13 @@ Apply config changes with `systemctl restart dsh-web` (or restart your `dsh web`
 
 ## Install
 
-From the marketplace (Settings → Plugins → Marketplace, searchable as `dsh-compat-guard`) or directly:
+From the marketplace (Settings → Plugins → Marketplace, searchable as `dsh-model-compat-guard`) or directly:
 
 ```bash
-dsh plugin --profile web add github:782042369/dsh-compat-guard
+dsh plugin --profile web add github:782042369/dsh-model-compat-guard
 ```
 
-Restart `dsh web` afterwards. Uninstall: `dsh plugin --profile web remove dsh-compat-guard`.
+Restart `dsh web` afterwards. Uninstall: `dsh plugin --profile web remove dsh-model-compat-guard`.
 
 ## Test
 

@@ -3,4 +3,4 @@
 # Install with `dsh plugin --profile <name> add github:782042369/dsh-compat-guard`.
 - insert:
     - id: compat-guard
-      name: 'dsh-compat-guard'
+      name: 'dsh-model-compat-guard'

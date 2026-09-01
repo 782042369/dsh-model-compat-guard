@@ -1,4 +1,4 @@
-# dsh-compat-guard
+# dsh-model-compat-guard
 
 [English](README.en.md)
 
@@ -66,14 +66,14 @@ Error: invalid justification: expected a non-empty sentence
 
 ## 安装 / 测试
 
-插件市场（Settings → Plugins → Marketplace 搜索 `dsh-compat-guard`）或 GitHub 直装：
+插件市场（Settings → Plugins → Marketplace 搜索 `dsh-model-compat-guard`）或 GitHub 直装：
 
 ```bash
-dsh plugin --profile web add github:782042369/dsh-compat-guard   # 装入 profile，重启 dsh web 后生效
+dsh plugin --profile web add github:782042369/dsh-model-compat-guard   # 装入 profile，重启 dsh web 后生效
 node test/smoke.mjs                                              # mock 驱动的全量断言
 ```
 
-卸载：`dsh plugin --profile web remove dsh-compat-guard`。
+卸载：`dsh plugin --profile web remove dsh-model-compat-guard`。
 
 ## 许可
 

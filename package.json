@@ -1,5 +1,5 @@
 {
-  "name": "dsh-compat-guard",
+  "name": "dsh-model-compat-guard",
   "version": "0.2.0",
   "description": "DSH compatibility guard: repairs auto-compaction failures for GPT/reasoning models (raises the summary token cap and lowers reasoning effort on purpose=compaction requests), strips doomed sandbox-escalation requests, and auto-fills the required tool-call 'description' argument other models often omit",
   "type": "module",
@@ -33,12 +33,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/782042369/dsh-compat-guard.git"
+    "url": "git+https://github.com/782042369/dsh-model-compat-guard.git"
   },
   "bugs": {
-    "url": "https://github.com/782042369/dsh-compat-guard/issues"
+    "url": "https://github.com/782042369/dsh-model-compat-guard/issues"
   },
-  "homepage": "https://github.com/782042369/dsh-compat-guard#readme",
+  "homepage": "https://github.com/782042369/dsh-model-compat-guard#readme",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
