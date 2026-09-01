@@ -1,6 +1,6 @@
 {
   "name": "dsh-compat-guard",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "DSH compatibility guard: repairs auto-compaction failures for GPT/reasoning models (raises the summary token cap and lowers reasoning effort on purpose=compaction requests) and auto-fills the required tool-call 'description' argument other models often omit",
   "type": "module",
   "main": "./src/index.js",
