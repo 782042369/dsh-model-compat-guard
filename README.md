@@ -1,6 +1,8 @@
 # dsh-compat-guard
 
-DSH（DeepSeek Harness）第三方模型兼容守卫插件，修复两个高频问题：
+[English](README.en.md)
+
+DSH（DeepSeek Harness）第三方模型兼容守卫插件——零配置开箱即用，修复三个高频问题（GPT/思考型模型压缩截断、必败提权请求 fail-close、工具调用缺 description）：
 
 ## 1. GPT / 思考型模型自动压缩失败
 
@@ -64,9 +66,17 @@ Error: invalid justification: expected a non-empty sentence
 
 ## 安装 / 测试
 
+插件市场（Settings → Plugins → Marketplace 搜索 `dsh-compat-guard`）或 GitHub 直装：
+
 ```bash
-dsh plugin --profile web add /www/wwwroot/dsh-compat-guard   # 装入 profile，重启 dsh web 后生效
-node test/smoke.mjs                                           # 24 项 mock 断言
+dsh plugin --profile web add github:782042369/dsh-compat-guard   # 装入 profile，重启 dsh web 后生效
+node test/smoke.mjs                                              # mock 驱动的全量断言
 ```
+
+卸载：`dsh plugin --profile web remove dsh-compat-guard`。
+
+## 许可
+
+[MIT](LICENSE)
 
 日志关键字：`compat-guard:`（tuned compaction request / filled missing description）。

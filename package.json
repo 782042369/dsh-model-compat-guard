@@ -1,10 +1,9 @@
 {
   "name": "dsh-compat-guard",
-  "version": "0.1.2",
-  "description": "DSH compatibility guard: repairs auto-compaction failures for GPT/reasoning models (raises the summary token cap and lowers reasoning effort on purpose=compaction requests) and auto-fills the required tool-call 'description' argument other models often omit",
+  "version": "0.2.0",
+  "description": "DSH compatibility guard: repairs auto-compaction failures for GPT/reasoning models (raises the summary token cap and lowers reasoning effort on purpose=compaction requests), strips doomed sandbox-escalation requests, and auto-fills the required tool-call 'description' argument other models often omit",
   "type": "module",
   "main": "./src/index.js",
-  "types": "./src/index.d.ts",
   "exports": {
     ".": "./src/index.js",
     "./package.json": "./package.json"
@@ -12,20 +11,34 @@
   "files": [
     "src",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "README.en.md",
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "scripts": {
     "test": "node --check src/index.js && node test/smoke.mjs"
   },
   "keywords": [
     "dsh",
-    "deepseek-harness",
     "dsh-plugin",
+    "deepseek-harness",
+    "compatibility",
     "compaction",
-    "compat",
-    "gpt"
+    "reasoning-models",
+    "gpt",
+    "qwen"
   ],
+  "author": "782042369",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/782042369/dsh-compat-guard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/782042369/dsh-compat-guard/issues"
+  },
+  "homepage": "https://github.com/782042369/dsh-compat-guard#readme",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

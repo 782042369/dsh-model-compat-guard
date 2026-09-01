@@ -1,6 +1,6 @@
 # dsh-compat-guard bundle patch: inserts the compat-guard plugin into the
 # profile's layer stack (id = plugin's exported cordis name, name = package).
-# Install with `dsh plugin --profile <name> add /www/wwwroot/dsh-compat-guard`.
+# Install with `dsh plugin --profile <name> add github:782042369/dsh-compat-guard`.
 - insert:
     - id: compat-guard
       name: 'dsh-compat-guard'
