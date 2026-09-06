@@ -2,7 +2,7 @@
 
 [中文文档](README.md)
 
-A compatibility guard plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) that repairs three frequent failure modes when driving DSH with non-DeepSeek models (GPT, Qwen-thinking, self-hosted reasoning models, ...). Zero-config out of the box; every fix can be toggled in `~/.dsh/compat-guard.json`.
+A compatibility guard plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) that repairs four frequent failure modes when driving DSH with non-DeepSeek models (GPT, Qwen-thinking, self-hosted reasoning models, ...). Zero-config out of the box; every fix can be toggled in `~/.dsh/compat-guard.json`.
 
 ## 1. Reasoning-model auto-compaction failure
 
@@ -56,6 +56,21 @@ and missing:
 
 Calls that already carry a usable description are untouched.
 
+## 4. Code Mode (PTC) run_code failures
+
+**Symptom** (upstream [Discussion #1605](https://github.com/deepseek-ai/deepseek-harness/discussions/1605)):
+
+```text
+Error: code run failed (exception): Expected ',', got '<eof>'
+Error: code run failed (exception): TypeError: b.stdout.slice is not a function
+```
+
+**Root cause**: (a) the model emits a syntactically incomplete TypeScript program — unbalanced quotes/backticks/brackets or truncated code, so the type-stripping parser (amaro/SWC) hits end-of-file while expecting a comma; (b) the model treats the bash result's `stdout` as a string — it is a structured object `{ text, truncated, spillPath? }`; the correct read is `res.stdout.text`. Both stem from models unadapted to PTC's "call every tool from TypeScript" convention, amplified by the harness reporting only a one-line error with no position.
+
+**Fix**: the `llm/stream` hook detects code-mode requests (when `run_code` is the single wired tool) and appends a compact discipline block to the end of the system prompt: tool results are plain JSON values (no `.result()` wrapper), the correct bash result shapes, and closure hygiene for complete programs. Appending at the end keeps every provider prefix (and prompt cache) intact.
+
+`codeDiscipline`: `"auto"` (default — code-mode requests only) | `"always"` (every main-loop request) | `"off"`.
+
 ## Configuration (optional)
 
 `~/.dsh/compat-guard.json`:
@@ -67,6 +82,7 @@ Calls that already carry a usable description are untouched.
   "compactionStripTools": false,
   "compactionPurposes": ["compaction"],
   "fillDescription": true,
+  "codeDiscipline": "auto",
   "stripEscalation": "redundant",
   "logFixes": true
 }
@@ -75,6 +91,7 @@ Calls that already carry a usable description are untouched.
 - `compactionEffort`: `"auto"` (cheapest level) | `"keep"` (leave untouched) | an explicit effort id.
 - `compactionStripTools`: when `true`, drops the tools list from compaction requests (prevents the model from calling
   tools mid-summary; costs the prefix KV cache).
+- `codeDiscipline`: `"auto"` (default — inject into code-mode requests only) | `"always"` (every main-loop request) | `"off"`.
 - Same-named fields passed as cordis plugin config override the file.
 
 Apply config changes with `systemctl restart dsh-web` (or restart your `dsh web` process). Look for
@@ -93,7 +110,7 @@ Restart `dsh web` afterwards. Uninstall: `dsh plugin --profile web remove dsh-mo
 ## Test
 
 ```bash
-node test/smoke.mjs   # mock-driven assertions for all three fixes
+node test/smoke.mjs   # mock-driven assertions for all four fixes
 ```
 
 ## License

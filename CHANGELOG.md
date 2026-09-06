@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 (2026-09-06)
+
+- feat: inject a compact code-mode (PTC) discipline block into the system
+  prompt of run_code-only requests — teaches models that tool results are
+  plain JSON values (no .result() wrapper), that bash returns structured
+  objects (res.stdout.text, never stdout.slice()), and to emit complete,
+  delimiter-balanced TypeScript programs. Prevents the frequent
+  "code run failed (exception): Expected ',', got '<eof>'" and
+  "TypeError: b.stdout.slice is not a function" failures (upstream
+  [Discussion #1605](https://github.com/deepseek-ai/deepseek-harness/discussions/1605)).
+  Configurable via codeDiscipline: auto (default) | always | off.
+
 ## 0.2.0 (2026-09-02)
 
 First public release.

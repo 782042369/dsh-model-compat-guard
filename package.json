@@ -1,7 +1,7 @@
 {
   "name": "dsh-model-compat-guard",
-  "version": "0.2.0",
-  "description": "DSH compatibility guard: repairs auto-compaction failures for GPT/reasoning models (raises the summary token cap and lowers reasoning effort on purpose=compaction requests), strips doomed sandbox-escalation requests, and auto-fills the required tool-call 'description' argument other models often omit",
+  "version": "0.3.0",
+  "description": "DSH compatibility guard: repairs auto-compaction failures for GPT/reasoning models (raises the summary token cap and lowers reasoning effort on purpose=compaction requests), strips doomed sandbox-escalation requests, auto-fills the required tool-call 'description' argument other models often omit, and injects a Code Mode (PTC) discipline block into the system prompt that prevents frequent run_code failures (incomplete TypeScript programs, misuse of structured bash results)",
   "type": "module",
   "main": "./src/index.js",
   "exports": {
@@ -27,7 +27,10 @@
     "compaction",
     "reasoning-models",
     "gpt",
-    "qwen"
+    "qwen",
+    "ptc",
+    "code-mode",
+    "run-code"
   ],
   "author": "782042369",
   "license": "MIT",

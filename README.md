@@ -2,7 +2,7 @@
 
 [English](README.en.md)
 
-DSH（DeepSeek Harness）第三方模型兼容守卫插件——零配置开箱即用，修复三个高频问题（GPT/思考型模型压缩截断、必败提权请求 fail-close、工具调用缺 description）：
+DSH（DeepSeek Harness）第三方模型兼容守卫插件——零配置开箱即用，修复四个高频问题（GPT/思考型模型压缩截断、必败提权请求 fail-close、工具调用缺 description、Code Mode run_code 高频报错）：
 
 ## 1. GPT / 思考型模型自动压缩失败
 
@@ -44,6 +44,21 @@ Error: invalid justification: expected a non-empty sentence
   - `workflow` → 补齐嵌套 `meta.description`
 - 已有合法 description 的调用不受影响；frozen 参数对象以替换方式更新（`exec` 本身是 waterfall 约定的可变载体）。
 
+## 4. Code Mode（PTC）run_code 高频报错（v0.3.0 新增）
+
+**症状**（官方 Discussion [#1605](https://github.com/deepseek-ai/deepseek-harness/discussions/1605)）：
+
+```text
+Error: code run failed (exception): Expected ',', got '<eof>'
+Error: code run failed (exception): TypeError: b.stdout.slice is not a function
+```
+
+**根因**：①模型生成的 TS 程序语法不完整——引号/反引号/括号未配对或代码被截断，类型擦除解析器（amaro/SWC）在期望逗号处读到文件尾；②模型把 bash 结果的 `stdout` 当字符串用——实际是结构化对象 `{ text, truncated, spillPath? }`，正确取法是 `res.stdout.text`。两类都是「模型不适应 PTC 用 TS 调用一切工具」+「Harness 只回一行错误无定位」的放大结果。
+
+**修复**：`llm/stream` 钩子检测 Code Mode 请求（wire 上只有 `run_code` 一个工具时），在 system prompt 末尾追加一段紧凑纪律块：工具结果是裸 JSON 值（没有 `.result()` 包装）、bash 结果的正确读法、TS 程序必须完整闭合（多行书写、收尾自查配对）。追加在末尾不动前缀，provider prompt cache 无损。
+
+配置 `codeDiscipline`：`"auto"`（默认，仅 code-mode 请求注入）/ `"always"`（所有主循环请求）/ `"off"`。
+
 ## 配置（可选）
 
 `~/.dsh/compat-guard.json`：
@@ -55,6 +70,7 @@ Error: invalid justification: expected a non-empty sentence
   "compactionStripTools": false,
   "compactionPurposes": ["compaction"],
   "fillDescription": true,
+  "codeDiscipline": "auto",
   "stripEscalation": "redundant",
   "logFixes": true
 }
@@ -62,6 +78,7 @@ Error: invalid justification: expected a non-empty sentence
 
 - `compactionEffort`：`"auto"`（最便宜档）/ `"keep"`（不动）/ 具体档位 id。
 - `compactionStripTools`：true 时压缩请求去掉 tools 列表（防模型压缩时调工具，代价是丢前缀 KV cache）。
+- `codeDiscipline`：`"auto"`（默认，仅 code-mode 请求注入纪律块）/ `"always"`（所有主循环请求）/ `"off"`（关闭）。
 - cordis 插件 config 传入的同名字段优先于该文件。
 
 ## 安装 / 测试
@@ -79,4 +96,4 @@ node test/smoke.mjs                                              # mock 驱动�
 
 [MIT](LICENSE)
 
-日志关键字：`compat-guard:`（tuned compaction request / filled missing description）。
+日志关键字：`compat-guard:`（tuned compaction request / filled missing description / stripped doomed escalation / injected code-mode discipline）。

@@ -193,10 +193,60 @@ async function scenarioEscalation() {
 	check("esc: combined escalation stripped", "sandbox_permissions" in both.arguments, false);
 }
 
+async function scenarioCodeDiscipline() {
+	delete listeners["llm/stream"]; delete listeners["tools/execute"];
+	const ctx = makeCtx({ modelInfo: {} });
+	apply(ctx, {});
+	const llm = listeners["llm/stream"];
+	const emptyStream = () => (async function* () {})();
+	const drain = async (stream) => {
+		for await (const chunk of stream) void chunk;
+	};
+	// auto: single run_code tool -> discipline appended once, prefix intact
+	const opts = { provider: "p", model: "m", system: "BASE PROMPT", messages: [], tools: [{ name: "run_code" }] };
+	await drain(llm(opts, () => emptyStream()));
+	check("disc: code-mode system gets discipline block", opts.system.includes("[compat-guard code-mode discipline]"), true);
+	check("disc: base prompt preserved as prefix", opts.system.startsWith("BASE PROMPT\n\n"), true);
+	const before = opts.system;
+	await drain(llm(opts, () => emptyStream()));
+	check("disc: idempotent on re-entry", opts.system, before);
+	// auto: json tool mode untouched
+	const json = { provider: "p", model: "m", system: "BASE", messages: [], tools: [{ name: "bash" }, { name: "read" }] };
+	await drain(llm(json, () => emptyStream()));
+	check("disc: json tool mode untouched", json.system, "BASE");
+	// auto: absent system becomes the block
+	const nosys = { provider: "p", model: "m", tools: [{ name: "run_code" }] };
+	await drain(llm(nosys, () => emptyStream()));
+	check("disc: absent system replaced by block", nosys.system.startsWith("[compat-guard code-mode discipline]"), true);
+	// aux purpose untouched even in code mode
+	const aux = { purpose: "session-title", provider: "p", model: "m", system: "BASE", tools: [{ name: "run_code" }] };
+	await drain(llm(aux, () => emptyStream()));
+	check("disc: aux purpose untouched", aux.system, "BASE");
+	// always: injects in json tool mode too
+	const always = makeCtx({ modelInfo: {} });
+	apply(always, { codeDiscipline: "always" });
+	const jsonAlways = { provider: "p", model: "m", system: "BASE", tools: [{ name: "bash" }] };
+	await drain(listeners["llm/stream"](jsonAlways, () => emptyStream()));
+	check("disc: always injects in json tool mode", jsonAlways.system.includes("compat-guard code-mode discipline"), true);
+	// off: never injects
+	const off = makeCtx({ modelInfo: {} });
+	apply(off, { codeDiscipline: "off" });
+	const codeOff = { provider: "p", model: "m", system: "BASE", tools: [{ name: "run_code" }] };
+	await drain(listeners["llm/stream"](codeOff, () => emptyStream()));
+	check("disc: off never injects", codeOff.system, "BASE");
+	// openai-style tool entries detected
+	const oai = makeCtx({ modelInfo: {} });
+	apply(oai, {});
+	const oaiOpts = { provider: "p", model: "m", system: "BASE", tools: [{ type: "function", function: { name: "run_code" } }] };
+	await drain(listeners["llm/stream"](oaiOpts, () => emptyStream()));
+	check("disc: openai-style run_code entry detected", oaiOpts.system.includes("compat-guard code-mode discipline"), true);
+}
+
 async function main() {
 	await scenarioLlm();
 	await scenarioTools();
 	await scenarioEscalation();
+	await scenarioCodeDiscipline();
 	if (failures > 0) {
 		console.error(`${failures} check(s) FAILED`);
 		process.exit(1);

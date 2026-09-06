@@ -22,6 +22,15 @@
  *    supply a usable one, synthesize it from the call payload (the command,
  *    the code, the prompt, ...) before validation runs.
  *
+ * 3. Code Mode (PTC) run_code failures. Models unadapted to programmatic
+ *    tool calling emit incomplete TypeScript programs (unbalanced quotes or
+ *    brackets, truncated code -> "code run failed (exception): Expected ',',
+ *    got '<eof>'") or misuse structured results ("b.stdout.slice is not a
+ *    function" — bash stdout is { text, truncated, spillPath? }, not a
+ *    string). Fix: append a compact discipline block to the system prompt of
+ *    code-mode requests (run_code is the single wired tool) teaching the
+ *    result shapes and closure hygiene.
+ *
  * Runtime configuration (optional): ~/.dsh/compat-guard.json
  *   {
  *     "compactionMaxTokens": 32768,
@@ -29,6 +38,7 @@
  *     "compactionStripTools": false,       // drop tools from compaction requests
  *     "compactionPurposes": ["compaction"],
  *     "fillDescription": true,
+ *     "codeDiscipline": "auto",          // "auto" | "always" | "off"
  *     "logFixes": true
  *   }
  * Values passed as the cordis plugin config override the file.
@@ -49,6 +59,7 @@ const DEFAULTS = Object.freeze({
 	compactionStripTools: false,
 	compactionPurposes: Object.freeze(["compaction"]),
 	fillDescription: true,
+	codeDiscipline: "auto",
 	stripEscalation: "redundant",
 	logFixes: true
 });
@@ -79,6 +90,17 @@ const EFFORT_PREFERENCE = new Map([
 	["max", 6]
 ]);
 
+/** Idempotency marker for the injected code-mode discipline block. */
+const CODE_DISCIPLINE_MARKER = "[compat-guard code-mode discipline]";
+
+/** Compact discipline appended to code-mode system prompts (see injectCodeDiscipline). */
+const CODE_DISCIPLINE_TEXT = [
+	CODE_DISCIPLINE_MARKER,
+	"- Tool results inside run_code are plain JSON values: there is no .result() or .json() wrapper — use the value directly.",
+	"- The bash tool returns structured objects: read output with res.stdout.text and res.stderr.text, status with res.exitCode. stdout and stderr are objects, NOT strings — never call .slice()/.trim()/.startsWith() on them or read .length directly.",
+	"- The code argument must be one complete, syntactically valid TypeScript program: every quote, backtick, brace, bracket, and paren balanced, every object/array/call closed. Prefer multi-line code over one long line and re-check delimiter balance before finishing."
+].join("\n");
+
 function isPlainObject(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -104,6 +126,7 @@ function normalizeConfig(inline) {
 	if (typeof cfg.compactionStripTools !== "boolean") cfg.compactionStripTools = false;
 	if (!Array.isArray(cfg.compactionPurposes) || cfg.compactionPurposes.length === 0) cfg.compactionPurposes = ["compaction"];
 	if (typeof cfg.fillDescription !== "boolean") cfg.fillDescription = true;
+	if (typeof cfg.codeDiscipline !== "string" || !["auto", "always", "off"].includes(cfg.codeDiscipline)) cfg.codeDiscipline = "auto";
 	if (typeof cfg.logFixes !== "boolean") cfg.logFixes = true;
 	return cfg;
 }
@@ -256,6 +279,40 @@ function cheapestEffort(efforts) {
 	return best;
 }
 
+/**
+ * Whether this outgoing request is a Code Mode (PTC) call: code mode wires
+ * exactly one callable tool (run_code), while JSON tool-calling mode wires
+ * the full schema set. Accepts both native { name } and OpenAI-style
+ * { function: { name } } tool entries.
+ * @param options GenerateOptions of the outgoing model call.
+ * @returns true when run_code is the only wired tool.
+ */
+function isCodeModeRequest(options) {
+	const tools = Array.isArray(options.tools) ? options.tools : [];
+	if (tools.length !== 1) return false;
+	const entry = tools[0];
+	const name = typeof entry?.name === "string" ? entry.name : typeof entry?.function?.name === "string" ? entry.function.name : undefined;
+	return name === "run_code";
+}
+
+/**
+ * Append the code-mode discipline block to a request's system prompt, once.
+ * Appending at the end keeps the provider prefix (and prompt cache) intact;
+ * the marker check makes re-application a no-op. Auxiliary requests
+ * (compaction / session-title) never run tools and are skipped.
+ * @param ctx runtime context for logging.
+ * @param cfg normalized plugin configuration.
+ * @param options GenerateOptions mutated in place (system only).
+ */
+function injectCodeDiscipline(ctx, cfg, options) {
+	if (cfg.codeDiscipline === "off") return;
+	if (options.purpose !== undefined) return;
+	if (cfg.codeDiscipline === "auto" && !isCodeModeRequest(options)) return;
+	if (typeof options.system === "string" && options.system.includes(CODE_DISCIPLINE_MARKER)) return;
+	options.system = typeof options.system === "string" && options.system.length > 0 ? options.system + "\n\n" + CODE_DISCIPLINE_TEXT : CODE_DISCIPLINE_TEXT;
+	if (cfg.logFixes) logInfo(ctx, "compat-guard: injected code-mode discipline into system prompt (" + options.provider + "/" + options.model + ")");
+}
+
 /** Tune one auxiliary (compaction-style) LLM request in place. */
 async function tuneAuxRequest(ctx, cfg, options) {
 	if (!isPlainObject(options)) return;
@@ -331,6 +388,7 @@ export function apply(ctx, config) {
 	// options are still tuned before the adapter reads them at first pull.
 	ctx.on("llm/stream", (options, next) => (async function* () {
 		try {
+			injectCodeDiscipline(ctx, cfg, options);
 			await tuneAuxRequest(ctx, cfg, options);
 		} catch (error) {
 			logWarn(ctx, `compat-guard: llm/stream tuning failed: ${error?.message ?? error}`);
