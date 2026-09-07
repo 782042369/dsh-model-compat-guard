@@ -313,10 +313,22 @@ function injectCodeDiscipline(ctx, cfg, options) {
 	const nextSystem = currentSystem.length > 0 ? currentSystem + "\n\n" + CODE_DISCIPLINE_TEXT : CODE_DISCIPLINE_TEXT;
 	try {
 		options.system = nextSystem;
-	} catch {
-		// DSH wires `system` as a getter-only accessor on the request object;
-		// re-declare it as a writable data property when direct assignment is rejected.
-		Object.defineProperty(options, "system", { value: nextSystem, writable: true, configurable: true });
+	} catch (assignError) {
+		// Diagnostic: DSH rejects system mutation. Dump the property shape once per
+		// process so the correct injection channel can be chosen.
+		if (!injectCodeDiscipline.diagDumped) {
+			injectCodeDiscipline.diagDumped = true;
+			try {
+				const d = Object.getOwnPropertyDescriptor(options, "system");
+				const proto = Object.getPrototypeOf(options);
+				const pd = proto ? Object.getOwnPropertyDescriptor(proto, "system") : undefined;
+				logWarn(ctx, "compat-guard: system desc own=" + JSON.stringify(d && { get: !!d.get, set: !!d.set, w: d.writable, c: d.configurable }) + " proto=" + JSON.stringify(pd && { get: !!pd.get, set: !!pd.set, c: pd.configurable }) + " frozen=" + Object.isFrozen(options) + " sealed=" + Object.isSealed(options) + " extensible=" + Object.isExtensible(options) + " keys=" + Object.keys(options).slice(0, 25).join(","));
+			} catch (e2) { logWarn(ctx, "compat-guard: diag failed: " + (e2 && e2.message)); }
+			logWarn(ctx, "compat-guard: assign error: " + (assignError && assignError.message));
+		}
+		try {
+			Object.defineProperty(options, "system", { value: nextSystem, writable: true, configurable: true });
+		} catch { /* diag above explains why */ }
 	}
 	if (cfg.logFixes) logInfo(ctx, "compat-guard: injected code-mode discipline into system prompt (" + options.provider + "/" + options.model + ")");
 }
