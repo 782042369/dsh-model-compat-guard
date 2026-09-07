@@ -93,6 +93,9 @@ const EFFORT_PREFERENCE = new Map([
 /** Idempotency marker for the injected code-mode discipline block. */
 const CODE_DISCIPLINE_MARKER = "[compat-guard code-mode discipline]";
 
+/** Plugin version string mirrored from package.json for load banners. */
+const VERSION = "0.3.4";
+
 /** Symbol-tag marking the discipline message spliced into a frozen request's messages array. */
 const DISCIPLINE_SPLICE_TAG = Symbol("compatGuardDiscipline");
 
@@ -400,6 +403,8 @@ function logWarn(ctx, message) {
 
 export function apply(ctx, config) {
 	const cfg = normalizeConfig(config);
+	logInfo(ctx, "compat-guard v" + VERSION + " loaded (codeDiscipline=" + cfg.codeDiscipline + ")");
+	let firstRequestSeen = false;
 	// The llm/stream waterfall must return the downstream AsyncIterable itself:
 	// consumers iterate it directly (`for await …of stream`), and for-await does
 	// NOT unwrap promises — an `async` listener here returns a Promise and every
@@ -409,6 +414,10 @@ export function apply(ctx, config) {
 	// options are still tuned before the adapter reads them at first pull.
 	ctx.on("llm/stream", (options, next) => (async function* () {
 		let spliced = false;
+		if (!firstRequestSeen) {
+			firstRequestSeen = true;
+			logInfo(ctx, "compat-guard: first llm/stream request seen (provider=" + options.provider + " model=" + options.model + " purpose=" + String(options.purpose) + " tools=" + (Array.isArray(options.tools) ? options.tools.length : "n/a") + ")");
+		}
 		try {
 			spliced = injectCodeDiscipline(ctx, cfg, options) === true;
 			await tuneAuxRequest(ctx, cfg, options);
