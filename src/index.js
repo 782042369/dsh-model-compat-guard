@@ -93,6 +93,9 @@ const EFFORT_PREFERENCE = new Map([
 /** Idempotency marker for the injected code-mode discipline block. */
 const CODE_DISCIPLINE_MARKER = "[compat-guard code-mode discipline]";
 
+/** Symbol-tag marking the discipline message spliced into a frozen request's messages array. */
+const DISCIPLINE_SPLICE_TAG = Symbol("compatGuardDiscipline");
+
 /** Compact discipline appended to code-mode system prompts (see injectCodeDiscipline). */
 const CODE_DISCIPLINE_TEXT = [
 	CODE_DISCIPLINE_MARKER,
@@ -302,7 +305,8 @@ function isCodeModeRequest(options) {
  * (compaction / session-title) never run tools and are skipped.
  * @param ctx runtime context for logging.
  * @param cfg normalized plugin configuration.
- * @param options GenerateOptions mutated in place (system only).
+ * @param options GenerateOptions mutated in place (system only, or via a tagged leading system message when the request object is frozen).
+ * @returns true when a tagged system message was spliced into options.messages and the caller must remove it after the stream drains.
  */
 function injectCodeDiscipline(ctx, cfg, options) {
 	if (cfg.codeDiscipline === "off") return;
@@ -313,24 +317,21 @@ function injectCodeDiscipline(ctx, cfg, options) {
 	const nextSystem = currentSystem.length > 0 ? currentSystem + "\n\n" + CODE_DISCIPLINE_TEXT : CODE_DISCIPLINE_TEXT;
 	try {
 		options.system = nextSystem;
-	} catch (assignError) {
-		// Diagnostic: DSH rejects system mutation. Dump the property shape once per
-		// process so the correct injection channel can be chosen.
-		if (!injectCodeDiscipline.diagDumped) {
-			injectCodeDiscipline.diagDumped = true;
-			try {
-				const d = Object.getOwnPropertyDescriptor(options, "system");
-				const proto = Object.getPrototypeOf(options);
-				const pd = proto ? Object.getOwnPropertyDescriptor(proto, "system") : undefined;
-				logWarn(ctx, "compat-guard: system desc own=" + JSON.stringify(d && { get: !!d.get, set: !!d.set, w: d.writable, c: d.configurable }) + " proto=" + JSON.stringify(pd && { get: !!pd.get, set: !!pd.set, c: pd.configurable }) + " frozen=" + Object.isFrozen(options) + " sealed=" + Object.isSealed(options) + " extensible=" + Object.isExtensible(options) + " keys=" + Object.keys(options).slice(0, 25).join(","));
-			} catch (e2) { logWarn(ctx, "compat-guard: diag failed: " + (e2 && e2.message)); }
-			logWarn(ctx, "compat-guard: assign error: " + (assignError && assignError.message));
-		}
-		try {
-			Object.defineProperty(options, "system", { value: nextSystem, writable: true, configurable: true });
-		} catch { /* diag above explains why */ }
+		if (cfg.logFixes) logInfo(ctx, "compat-guard: injected code-mode discipline into system prompt (" + options.provider + "/" + options.model + ")");
+		return false;
+	} catch {
+		// The harness Object.freeze()s the request object (shallow): property writes
+		// are impossible. Splice the discipline into the per-request messages array
+		// as a leading system message instead (adapters fold system-role entries
+		// into the prompt), and let the caller remove it after the stream drains.
+		const messages = options.messages;
+		if (!Array.isArray(messages) || Object.isFrozen(messages)) return false;
+		const head = messages[0];
+		if (head && head[DISCIPLINE_SPLICE_TAG] === true) return false;
+		messages.unshift({ role: "system", content: [{ type: "text", text: CODE_DISCIPLINE_TEXT }], [DISCIPLINE_SPLICE_TAG]: true });
+		if (cfg.logFixes) logInfo(ctx, "compat-guard: injected code-mode discipline via messages splice (" + options.provider + "/" + options.model + ")");
+		return true;
 	}
-	if (cfg.logFixes) logInfo(ctx, "compat-guard: injected code-mode discipline into system prompt (" + options.provider + "/" + options.model + ")");
 }
 
 /** Tune one auxiliary (compaction-style) LLM request in place. */
@@ -407,13 +408,28 @@ export function apply(ctx, config) {
 	// dsh-session-checkpoint-policy uses for its checkpoint wrapper), so the
 	// options are still tuned before the adapter reads them at first pull.
 	ctx.on("llm/stream", (options, next) => (async function* () {
+		let spliced = false;
 		try {
-			injectCodeDiscipline(ctx, cfg, options);
+			spliced = injectCodeDiscipline(ctx, cfg, options) === true;
 			await tuneAuxRequest(ctx, cfg, options);
 		} catch (error) {
 			logWarn(ctx, `compat-guard: llm/stream tuning failed: ${error?.message ?? error}`);
 		}
-		yield* next();
+		try {
+			yield* next();
+		} finally {
+			// Remove the discipline message after the stream drains so a shared
+			// messages array never persists the spliced entry into session history.
+			if (spliced && Array.isArray(options.messages)) {
+				const messages = options.messages;
+				for (let i = 0; i < Math.min(messages.length, 2); i++) {
+					if (messages[i] && messages[i][DISCIPLINE_SPLICE_TAG] === true) {
+						messages.splice(i, 1);
+						break;
+					}
+				}
+			}
+		}
 	})(), { global: true, prepend: true });
 	ctx.on("tools/execute", async (exec, next) => {
 		if (exec !== null && typeof exec === "object") {
