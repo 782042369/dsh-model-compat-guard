@@ -94,7 +94,7 @@ const EFFORT_PREFERENCE = new Map([
 const CODE_DISCIPLINE_MARKER = "[compat-guard code-mode discipline]";
 
 /** Plugin version string mirrored from package.json for load banners. */
-const VERSION = "0.3.4";
+const VERSION = "0.3.5";
 
 /** Symbol-tag marking the discipline message spliced into a frozen request's messages array. */
 const DISCIPLINE_SPLICE_TAG = Symbol("compatGuardDiscipline");
@@ -416,7 +416,8 @@ export function apply(ctx, config) {
 		let spliced = false;
 		if (!firstRequestSeen) {
 			firstRequestSeen = true;
-			logInfo(ctx, "compat-guard: first llm/stream request seen (provider=" + options.provider + " model=" + options.model + " purpose=" + String(options.purpose) + " tools=" + (Array.isArray(options.tools) ? options.tools.length : "n/a") + ")");
+			const t0 = Array.isArray(options.tools) ? options.tools[0] : undefined;
+			logInfo(ctx, "compat-guard: first llm/stream request seen (provider=" + options.provider + " model=" + options.model + " purpose=" + String(options.purpose) + " tools=" + (Array.isArray(options.tools) ? options.tools.length : "n/a") + " tool0=" + (t0 ? String(t0.name ?? t0.function?.name) : "n/a") + " raw=" + JSON.stringify(t0).slice(0, 140) + ")");
 		}
 		try {
 			spliced = injectCodeDiscipline(ctx, cfg, options) === true;
