@@ -309,7 +309,15 @@ function injectCodeDiscipline(ctx, cfg, options) {
 	if (options.purpose !== undefined) return;
 	if (cfg.codeDiscipline === "auto" && !isCodeModeRequest(options)) return;
 	if (typeof options.system === "string" && options.system.includes(CODE_DISCIPLINE_MARKER)) return;
-	options.system = typeof options.system === "string" && options.system.length > 0 ? options.system + "\n\n" + CODE_DISCIPLINE_TEXT : CODE_DISCIPLINE_TEXT;
+	const currentSystem = typeof options.system === "string" ? options.system : "";
+	const nextSystem = currentSystem.length > 0 ? currentSystem + "\n\n" + CODE_DISCIPLINE_TEXT : CODE_DISCIPLINE_TEXT;
+	try {
+		options.system = nextSystem;
+	} catch {
+		// DSH wires `system` as a getter-only accessor on the request object;
+		// re-declare it as a writable data property when direct assignment is rejected.
+		Object.defineProperty(options, "system", { value: nextSystem, writable: true, configurable: true });
+	}
 	if (cfg.logFixes) logInfo(ctx, "compat-guard: injected code-mode discipline into system prompt (" + options.provider + "/" + options.model + ")");
 }
 
