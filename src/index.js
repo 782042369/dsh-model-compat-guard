@@ -94,9 +94,14 @@ const EFFORT_PREFERENCE = new Map([
 const CODE_DISCIPLINE_MARKER = "[compat-guard code-mode discipline]";
 
 /** Plugin version string mirrored from package.json for load banners. */
-const VERSION = "0.3.6";
+const VERSION = "0.3.7";
 
-/** Symbol-tag marking the discipline message spliced into a frozen request's messages array. */
+/**
+ * codeDiscipline note (v0.3.7): the harness deep-freezes llm/stream request
+ * objects (properties AND the messages array), so no in-hook mutation channel
+ * exists. The discipline text now lives in ~/.dsh/AGENTS.md where the native
+ * instruction pipeline injects it into every system prompt. Keep "off".
+ */
 const DISCIPLINE_SPLICE_TAG = Symbol("compatGuardDiscipline");
 
 /** Compact discipline appended to code-mode system prompts (see injectCodeDiscipline). */
