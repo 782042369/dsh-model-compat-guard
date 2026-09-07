@@ -94,7 +94,7 @@ const EFFORT_PREFERENCE = new Map([
 const CODE_DISCIPLINE_MARKER = "[compat-guard code-mode discipline]";
 
 /** Plugin version string mirrored from package.json for load banners. */
-const VERSION = "0.3.5";
+const VERSION = "0.3.6";
 
 /** Symbol-tag marking the discipline message spliced into a frozen request's messages array. */
 const DISCIPLINE_SPLICE_TAG = Symbol("compatGuardDiscipline");
@@ -417,7 +417,8 @@ export function apply(ctx, config) {
 		if (!firstRequestSeen) {
 			firstRequestSeen = true;
 			const t0 = Array.isArray(options.tools) ? options.tools[0] : undefined;
-			logInfo(ctx, "compat-guard: first llm/stream request seen (provider=" + options.provider + " model=" + options.model + " purpose=" + String(options.purpose) + " tools=" + (Array.isArray(options.tools) ? options.tools.length : "n/a") + " tool0=" + (t0 ? String(t0.name ?? t0.function?.name) : "n/a") + " raw=" + JSON.stringify(t0).slice(0, 140) + ")");
+			const msgs = options.messages;
+			logInfo(ctx, "compat-guard: first llm/stream request seen (provider=" + options.provider + " model=" + options.model + " purpose=" + String(options.purpose) + " tools=" + (Array.isArray(options.tools) ? options.tools.length : "n/a") + " tool0=" + (t0 ? String(t0.name ?? t0.function?.name) : "n/a") + " systemType=" + typeof options.system + " msgsIsArray=" + Array.isArray(msgs) + " msgsFrozen=" + (Array.isArray(msgs) ? Object.isFrozen(msgs) : "n/a") + " msgsLen=" + (Array.isArray(msgs) ? msgs.length : "n/a") + ")");
 		}
 		try {
 			spliced = injectCodeDiscipline(ctx, cfg, options) === true;
