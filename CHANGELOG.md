@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.7 (2026-09-07)
+
+- docs: codeDiscipline superseded by the native instruction pipeline. The
+  harness deep-freezes llm/stream request objects (properties AND the messages
+  array), so no in-hook mutation channel exists — assignment, defineProperty,
+  and array splice are all rejected. The discipline text now lives in
+  `~/.dsh/AGENTS.md` (native AGENTS.md/CLAUDE.md injection, effective on the
+  next turn without a restart). `codeDiscipline: "off"` is the archived
+  default; the three original fixes (compaction tuning, description fill,
+  doomed-escalation strip) are unaffected and keep working.
+- feat: load banner + first-request probe diagnostics (visible via
+  `journalctl -u dsh-web`) to make plugin-load and hook-fire states
+  observable from the outside.
+
 ## 0.3.0 (2026-09-06)
 
 - feat: inject a compact code-mode (PTC) discipline block into the system
