@@ -59,8 +59,12 @@ const DEFAULTS = Object.freeze({
 	compactionStripTools: false,
 	compactionPurposes: Object.freeze(["compaction"]),
 	fillDescription: true,
-	codeDiscipline: "auto",
+	descriptionTools: Object.freeze(["bash", "run_code", "subagent", "subagent_fork", "workflow"]),
+	codeDiscipline: "off",
 	stripEscalation: "redundant",
+	unknownPolicy: "preserve",
+	modelInfoTtlMs: 300000,
+	modelInfoTimeoutMs: 5000,
 	logFixes: true
 });
 
@@ -94,7 +98,9 @@ const EFFORT_PREFERENCE = new Map([
 const CODE_DISCIPLINE_MARKER = "[compat-guard code-mode discipline]";
 
 /** Plugin version string mirrored from package.json for load banners. */
-const VERSION = "0.3.7";
+const VERSION = "0.4.0";
+/** Contexts already wired by this module; prevents duplicate hooks on reload. */
+const APPLIED_CONTEXTS = new WeakSet();
 
 /**
  * codeDiscipline note (v0.3.7): the harness deep-freezes llm/stream request
@@ -132,12 +138,20 @@ function normalizeConfig(inline) {
 			if (value !== undefined && key in DEFAULTS) cfg[key] = value;
 		}
 	}
-	if (!Number.isInteger(cfg.compactionMaxTokens) || cfg.compactionMaxTokens < 1024) cfg.compactionMaxTokens = DEFAULTS.compactionMaxTokens;
+	if (!Number.isInteger(cfg.compactionMaxTokens) || cfg.compactionMaxTokens < 1024 || cfg.compactionMaxTokens > 1_000_000) cfg.compactionMaxTokens = DEFAULTS.compactionMaxTokens;
 	if (typeof cfg.compactionEffort !== "string") cfg.compactionEffort = "auto";
 	if (typeof cfg.compactionStripTools !== "boolean") cfg.compactionStripTools = false;
 	if (!Array.isArray(cfg.compactionPurposes) || cfg.compactionPurposes.length === 0) cfg.compactionPurposes = ["compaction"];
+	cfg.compactionPurposes = cfg.compactionPurposes.filter((purpose) => typeof purpose === "string" && purpose.length > 0);
+	if (cfg.compactionPurposes.length === 0) cfg.compactionPurposes = ["compaction"];
 	if (typeof cfg.fillDescription !== "boolean") cfg.fillDescription = true;
-	if (typeof cfg.codeDiscipline !== "string" || !["auto", "always", "off"].includes(cfg.codeDiscipline)) cfg.codeDiscipline = "auto";
+	if (!Array.isArray(cfg.descriptionTools)) cfg.descriptionTools = [...DEFAULTS.descriptionTools];
+	cfg.descriptionTools = [...new Set(cfg.descriptionTools.filter((tool) => typeof tool === "string" && tool.length > 0))];
+	if (typeof cfg.codeDiscipline !== "string" || !["auto", "always", "off"].includes(cfg.codeDiscipline)) cfg.codeDiscipline = "off";
+	if (typeof cfg.stripEscalation !== "string" || !["redundant", "always", "off"].includes(cfg.stripEscalation)) cfg.stripEscalation = "redundant";
+	if (typeof cfg.unknownPolicy !== "string" || !["preserve", "strip"].includes(cfg.unknownPolicy)) cfg.unknownPolicy = "preserve";
+	if (!Number.isInteger(cfg.modelInfoTtlMs) || cfg.modelInfoTtlMs < 0 || cfg.modelInfoTtlMs > 3_600_000) cfg.modelInfoTtlMs = DEFAULTS.modelInfoTtlMs;
+	if (!Number.isInteger(cfg.modelInfoTimeoutMs) || cfg.modelInfoTimeoutMs < 100 || cfg.modelInfoTimeoutMs > 60_000) cfg.modelInfoTimeoutMs = DEFAULTS.modelInfoTimeoutMs;
 	if (typeof cfg.logFixes !== "boolean") cfg.logFixes = true;
 	return cfg;
 }
@@ -220,6 +234,7 @@ function fillMissingDescription(ctx, cfg, exec) {
 	}
 	const schema = tool?.parameters;
 	if (!isPlainObject(schema)) return;
+	if (!cfg.descriptionTools.includes(exec.name)) return;
 	const required = Array.isArray(schema.required) ? schema.required : [];
 	let next;
 	const ensure = () => next ?? (next = { ...base });
@@ -229,15 +244,17 @@ function fillMissingDescription(ctx, cfg, exec) {
 			ensure().description = synthesizeDescription(exec.name, base);
 		}
 	}
-	if (exec.name === "workflow" && isPlainObject(base.meta) && Array.isArray(schema.properties?.meta?.required) && schema.properties.meta.required.includes("description")) {
-		const current = base.meta.description;
+	if (exec.name === "workflow" && Array.isArray(schema.properties?.meta?.required) && schema.properties.meta.required.includes("description")) {
+		const meta = isPlainObject(base.meta) ? base.meta : {};
+		const current = meta.description;
 		if (typeof current !== "string" || current.trim().length === 0) {
-			ensure().meta = { ...base.meta, description: `${typeof base.meta.name === "string" && base.meta.name.length > 0 ? base.meta.name : "Unnamed"} workflow` };
+			const name = typeof meta.name === "string" && meta.name.length > 0 ? meta.name : "Unnamed";
+			ensure().meta = { ...meta, name, description: name + " workflow" };
 		}
 	}
 	if (next !== undefined) {
 		exec.arguments = next;
-		if (cfg.logFixes) logInfo(ctx, `compat-guard: filled missing ${exec.name} description: "${next.description ?? next.meta?.description}"`);
+		if (cfg.logFixes) logInfo(ctx, "compat-guard: filled " + exec.name + " description (chars=" + String(next.description ?? next.meta?.description ?? "").length + ")");
 	}
 }
 
@@ -254,25 +271,30 @@ function stripDoomedEscalation(ctx, cfg, exec) {
 	if (cfg.stripEscalation === "off") return;
 	const args = exec.arguments;
 	if (!isPlainObject(args) || args.sandbox_permissions === undefined) return;
-	if (cfg.stripEscalation !== "always") {
-		let keep = false;
+	const justificationValid = typeof args.justification === "string" && args.justification.trim().length > 0;
+	let keep = justificationValid && cfg.stripEscalation !== "always";
+	let policyKnown = false;
+	if (keep) {
 		try {
 			const policy = typeof ctx.get === "function" ? ctx.get("sandboxPolicy") : undefined;
 			if (policy !== undefined && typeof policy.resolve === "function") {
 				const standing = policy.resolve(exec.agent === undefined ? {} : { session: exec.agent.session });
 				const effective = standing?.mode;
-				keep = typeof effective === "string" && (WIDER_MODES[effective] ?? []).includes(args.sandbox_permissions);
+				policyKnown = typeof effective === "string" && (effective === "danger-full-access" || Object.prototype.hasOwnProperty.call(WIDER_MODES, effective));
+				keep = policyKnown && (WIDER_MODES[effective] ?? []).includes(args.sandbox_permissions);
 			}
 		} catch {
+			policyKnown = false;
 			keep = false;
 		}
-		if (keep) return;
 	}
+	if (!policyKnown && cfg.unknownPolicy === "preserve" && justificationValid && cfg.stripEscalation !== "always") return;
+	if (keep) return;
 	const next = { ...args };
 	delete next.sandbox_permissions;
 	if (next.justification !== undefined) delete next.justification;
 	exec.arguments = next;
-	if (cfg.logFixes) logInfo(ctx, `compat-guard: stripped doomed ${exec.name} escalation to "${String(args.sandbox_permissions)}" (redundant or unavailable; running at the standing mode)`);
+	if (cfg.logFixes) logInfo(ctx, "compat-guard: stripped doomed " + exec.name + " escalation (reason=" + (justificationValid ? (policyKnown ? "non-widening" : "unknown-policy") : "invalid-justification") + ")");
 }
 
 /** Cheapest supported reasoning effort id, or undefined when untaggable. */
@@ -342,26 +364,66 @@ function injectCodeDiscipline(ctx, cfg, options) {
 	}
 }
 
-/** Tune one auxiliary (compaction-style) LLM request in place. */
-async function tuneAuxRequest(ctx, cfg, options) {
+/** Resolve model capabilities with bounded, coalesced caching.
+ * @param ctx - Cordis runtime context.
+ * @param cfg - normalized plugin configuration.
+ * @param options - outgoing model request.
+ * @param cache - per-plugin capability cache.
+ * @returns A promise for the model capability record or undefined.
+ */
+async function lookupModelInfo(ctx, cfg, options, cache) {
+	const key = options.provider + "\0" + options.model;
+	const now = Date.now();
+	const cached = cache.get(key);
+	if (cached !== undefined && cached.expiresAt > now) return cached.promise;
+	let timer;
+	const timeout = new Promise((_, reject) => {
+		timer = setTimeout(() => reject(new Error("model capability lookup timed out")), cfg.modelInfoTimeoutMs);
+		(timer).unref?.();
+	});
+	const promise = Promise.race([ctx.llm.resolveModelInfo(options.provider, options.model, options.signal), timeout])
+		.finally(() => clearTimeout(timer))
+		.then((value) => {
+			cache.set(key, { expiresAt: Date.now() + cfg.modelInfoTtlMs, promise: Promise.resolve(value) });
+			return value;
+		}, (error) => {
+			cache.delete(key);
+			throw error;
+		});
+	cache.set(key, { expiresAt: now + cfg.modelInfoTtlMs, promise });
+	return promise;
+}
+
+/** Tune one auxiliary (compaction-style) LLM request in place.
+ * @param ctx - Cordis runtime context.
+ * @param cfg - normalized plugin configuration.
+ * @param options - outgoing model request.
+ * @param cache - per-plugin capability cache.
+ * @returns A promise settled after best-effort tuning.
+ */
+async function tuneAuxRequest(ctx, cfg, options, cache) {
 	if (!isPlainObject(options)) return;
 	if (typeof options.provider !== "string" || typeof options.model !== "string") return;
 	if (!cfg.compactionPurposes.includes(options.purpose)) return;
 	let info;
 	try {
-		info = await ctx.llm.resolveModelInfo(options.provider, options.model, options.signal);
+		info = await lookupModelInfo(ctx, cfg, options, cache);
 	} catch (error) {
 		if (cfg.logFixes) logWarn(ctx, `compat-guard: model info lookup failed for ${options.provider}/${options.model}: ${error?.message ?? error}`);
 	}
 	const changes = [];
 	if (Number.isInteger(cfg.compactionMaxTokens)) {
 		let raise = cfg.compactionMaxTokens;
-		const declared = info?.defaultMaxTokens;
-		if (Number.isInteger(declared) && declared > 8192) raise = Math.min(raise, declared);
+		const hardCap = info?.hardMaxTokens;
+		if (Number.isInteger(hardCap) && hardCap > 0) raise = Math.min(raise, hardCap);
 		const current = typeof options.maxTokens === "number" ? options.maxTokens : 0;
-		if (raise > current) {
-			options.maxTokens = raise;
-			changes.push(`maxTokens ${current || "unset"}→${raise}`);
+		if (raise > 0 && raise !== current) {
+			try {
+				options.maxTokens = raise;
+				if (options.maxTokens === raise) changes.push(`maxTokens ${current || "unset"}→${raise}`);
+			} catch {
+				if (cfg.logFixes) logWarn(ctx, "compat-guard: compaction maxTokens skipped because request is immutable");
+			}
 		}
 	}
 	if (cfg.compactionEffort !== "keep") {
@@ -376,14 +438,22 @@ async function tuneAuxRequest(ctx, cfg, options) {
 			else if (ids.includes(cfg.compactionEffort)) effort = cfg.compactionEffort;
 			else if (cfg.logFixes) logWarn(ctx, `compat-guard: configured effort "${cfg.compactionEffort}" unsupported by ${options.provider}/${options.model}; keeping ${options.reasoningEffort ?? reasoning.defaultEffort ?? "default"}`);
 			if (effort !== undefined && options.reasoningEffort !== effort) {
-				options.reasoningEffort = effort;
-				changes.push(`effort→${effort}`);
+				try {
+					options.reasoningEffort = effort;
+					if (options.reasoningEffort === effort) changes.push(`effort→${effort}`);
+				} catch {
+					if (cfg.logFixes) logWarn(ctx, "compat-guard: compaction reasoning effort skipped because request is immutable");
+				}
 			}
 		}
 	}
 	if (cfg.compactionStripTools && Array.isArray(options.tools) && options.tools.length > 0) {
-		options.tools = [];
-		changes.push("tools stripped");
+		try {
+			options.tools = [];
+			if (Array.isArray(options.tools) && options.tools.length === 0) changes.push("tools stripped");
+		} catch {
+			if (cfg.logFixes) logWarn(ctx, "compat-guard: compaction tools strip skipped because request is immutable");
+		}
 	}
 	if (changes.length > 0 && cfg.logFixes) logInfo(ctx, `compat-guard: tuned ${options.purpose} request for ${options.provider}/${options.model} (${changes.join(", ")})`);
 }
@@ -406,8 +476,18 @@ function logWarn(ctx, message) {
 	} catch {}
 }
 
+/** Apply compatibility repairs to one Cordis context.
+ * @param ctx - Cordis plugin context.
+ * @param config - optional inline configuration override.
+ * @returns void; hooks are owned by the context lifecycle.
+ */
 export function apply(ctx, config) {
+	if (ctx !== null && typeof ctx === "object") {
+		if (APPLIED_CONTEXTS.has(ctx)) return;
+		APPLIED_CONTEXTS.add(ctx);
+	}
 	const cfg = normalizeConfig(config);
+	const modelInfoCache = new Map();
 	logInfo(ctx, "compat-guard v" + VERSION + " loaded (codeDiscipline=" + cfg.codeDiscipline + ")");
 	let firstRequestSeen = false;
 	// The llm/stream waterfall must return the downstream AsyncIterable itself:
@@ -427,7 +507,7 @@ export function apply(ctx, config) {
 		}
 		try {
 			spliced = injectCodeDiscipline(ctx, cfg, options) === true;
-			await tuneAuxRequest(ctx, cfg, options);
+			await tuneAuxRequest(ctx, cfg, options, modelInfoCache);
 		} catch (error) {
 			logWarn(ctx, `compat-guard: llm/stream tuning failed: ${error?.message ?? error}`);
 		}

@@ -12,7 +12,7 @@ DSH（DeepSeek Harness）第三方模型兼容守卫插件——零配置开箱�
 
 **修复**：拦截 `purpose === "compaction"` 的 LLM 请求（`llm/stream` waterfall）：
 
-- `maxTokens` 提升到 32768（可配），已知模型声明上限时自动 clamp；
+- `maxTokens` 提升到 32768（可配）；仅在模型能力明确提供 `hardMaxTokens` 时 clamp，不把 DSH 的 `defaultMaxTokens` 默认值误当硬上限；
 - 推理档位降到该模型支持的最便宜档（优先 off > minimal > low，按模型 efforts 列表实际可选值挑选）；
 - 不支持思考档位的模型不会强行设置（避免 UNSUPPORTED_REASONING_EFFORT）。
 
@@ -57,7 +57,7 @@ Error: code run failed (exception): TypeError: b.stdout.slice is not a function
 
 **修复**：`llm/stream` 钩子检测 Code Mode 请求（wire 上只有 `run_code` 一个工具时），在 system prompt 末尾追加一段紧凑纪律块：工具结果是裸 JSON 值（没有 `.result()` 包装）、bash 结果的正确读法、TS 程序必须完整闭合（多行书写、收尾自查配对）。追加在末尾不动前缀，provider prompt cache 无损。
 
-配置 `codeDiscipline`：`"auto"`（默认，仅 code-mode 请求注入）/ `"always"`（所有主循环请求）/ `"off"`。
+配置 `codeDiscipline`：`"off"`（默认，推荐使用原生 `~/.dsh/AGENTS.md`）/ `"auto"`（仅在可变请求对象上兼容旧路径）/ `"always"`。DSH 深冻结请求时旧路径会安全跳过并记录原因。
 
 ## 配置（可选）
 
@@ -70,15 +70,19 @@ Error: code run failed (exception): TypeError: b.stdout.slice is not a function
   "compactionStripTools": false,
   "compactionPurposes": ["compaction"],
   "fillDescription": true,
-  "codeDiscipline": "auto",
+  "descriptionTools": ["bash", "run_code", "subagent", "subagent_fork", "workflow"],
+  "codeDiscipline": "off",
   "stripEscalation": "redundant",
+  "unknownPolicy": "preserve",
+  "modelInfoTtlMs": 300000,
+  "modelInfoTimeoutMs": 5000,
   "logFixes": true
 }
 ```
 
 - `compactionEffort`：`"auto"`（最便宜档）/ `"keep"`（不动）/ 具体档位 id。
 - `compactionStripTools`：true 时压缩请求去掉 tools 列表（防模型压缩时调工具，代价是丢前缀 KV cache）。
-- `codeDiscipline`：`"auto"`（默认，仅 code-mode 请求注入纪律块）/ `"always"`（所有主循环请求）/ `"off"`（关闭）。
+- `codeDiscipline`：`"off"`（默认，使用原生 AGENTS.md）/ `"auto"` / `"always"`（仅兼容可变请求对象）。
 - cordis 插件 config 传入的同名字段优先于该文件。
 
 ## 安装 / 测试
@@ -86,7 +90,7 @@ Error: code run failed (exception): TypeError: b.stdout.slice is not a function
 插件市场（Settings → Plugins → Marketplace 搜索 `dsh-model-compat-guard`）或 GitHub 直装：
 
 ```bash
-dsh plugin --profile web add github:782042369/dsh-model-compat-guard   # 装入 profile，重启 dsh web 后生效
+dsh plugin --profile web add github:782042369/dsh-model-compat-guard#v0.4.0   # 固定版本装入 profile，重启 dsh web 后生效
 node test/smoke.mjs                                              # mock 驱动的全量断言
 ```
 

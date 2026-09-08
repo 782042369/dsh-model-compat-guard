@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- fix: stop treating DSH's defaultMaxTokens field as a hard provider cap; honor an explicit hardMaxTokens capability when a provider supplies one.
+- fix: reject blank sandbox justifications and preserve escalation requests when the active policy is unknown unless explicitly configured otherwise.
+- fix: fill missing workflow metadata even when the entire meta object is absent.
+- feat: coalesce and TTL-cache model capability lookups with a timeout to avoid serial metadata stalls.
+- harden: restrict automatic description repair to known UI tools, redact payload text from repair logs, and prevent duplicate hook registration.
+- change: deprecated code-mode prompt mutation is now off by default; use the native AGENTS.md instruction pipeline.
+
 ## 0.3.7 (2026-09-07)
 
 - docs: codeDiscipline superseded by the native instruction pipeline. The

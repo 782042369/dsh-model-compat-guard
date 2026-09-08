@@ -57,7 +57,7 @@ async function scenarioLlm() {
 			reasoning: { efforts: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }, { id: "max" }, { id: "off" }], defaultEffort: "high" }
 		}
 	});
-	apply(ctx, {});
+	apply(ctx, { codeDiscipline: "auto" });
 	const llm = listeners["llm/stream"];
 	// Production consumes the listener's return value with `for await …of`:
 	// it must BE the AsyncIterable (for-await never unwraps a Promise), and the
@@ -84,8 +84,13 @@ async function scenarioLlm() {
 	apply(small, {});
 	const opts2 = { purpose: "compaction", provider: "p", model: "m", maxTokens: 8192 };
 	await drain(listeners["llm/stream"](opts2, () => emptyStream()));
-	check("llm: maxTokens clamped to declared cap", opts2.maxTokens, 12000);
+	check("llm: defaultMaxTokens is not treated as a hard cap", opts2.maxTokens, 32768);
 	check("llm: cheapest without off = low", opts2.reasoningEffort, "low");
+	const tiny = makeCtx({ modelInfo: { defaultMaxTokens: 4096, reasoning: { efforts: [{ id: "low" }] } } });
+	apply(tiny, {});
+	const optsTiny = { purpose: "compaction", provider: "p", model: "m", maxTokens: 8192 };
+	await drain(listeners["llm/stream"](optsTiny, () => emptyStream()));
+	check("llm: low default is not treated as a hard cap", optsTiny.maxTokens, 32768);
 	// model without reasoning support: effort must not be set
 	const noreason = makeCtx({ modelInfo: { defaultMaxTokens: 64000 } });
 	apply(noreason, {});
@@ -106,6 +111,9 @@ async function scenarioLlm() {
 	check("llm: keep leaves effort unset", "reasoningEffort" in opts5, false);
 	check("llm: stripTools empties tools", opts5.tools, []);
 	check("llm: configured maxTokens honored", opts5.maxTokens, 16384);
+	const frozenOpts = Object.freeze({ purpose: "compaction", provider: "p", model: "m", maxTokens: 8192, reasoningEffort: "high", tools: Object.freeze([{}]) });
+	await drain(listeners["llm/stream"](frozenOpts, () => emptyStream()));
+	check("llm: frozen request remains safe and explicit", frozenOpts.maxTokens, 8192);
 }
 
 async function scenarioTools() {
@@ -132,6 +140,8 @@ async function scenarioTools() {
 	check("tools: subagent description from prompt", r.exec.arguments.description, "Delegate: Research GPT compaction failures");
 	r = await run("workflow", { script: "return 1;", meta: { name: "audit" } });
 	check("tools: workflow meta.description filled", r.exec.arguments.meta.description, "audit workflow");
+	r = await run("workflow", { script: "return 1;" });
+	check("tools: workflow missing meta is created", r.exec.arguments.meta.description, "Unnamed workflow");
 	r = await run("read", { file_path: "/x" });
 	check("tools: no required description -> untouched", r.exec.arguments, { file_path: "/x" });
 	r = await run("weird", { });
@@ -167,6 +177,9 @@ async function scenarioEscalation() {
 	const kept = { name: "bash", agent: { session: { id: "s" } }, arguments: { command: "ls", description: "L", sandbox_permissions: "danger-full-access", justification: "really need it" }, signal: { aborted: false } };
 	await exeWW(kept, () => "ok");
 	check("esc: strictly-wider request kept for approval flow", kept.arguments.sandbox_permissions, "danger-full-access");
+	const blank = { name: "bash", agent: { session: { id: "s" } }, arguments: { command: "ls", description: "L", sandbox_permissions: "danger-full-access", justification: "   " }, signal: { aborted: false } };
+	await exeWW(blank, () => "ok");
+	check("esc: blank justification stripped", "sandbox_permissions" in blank.arguments, false);
 	const doomed = { name: "bash", agent: { session: { id: "s" } }, arguments: { command: "ls", description: "L", sandbox_permissions: "workspace-write", justification: "same mode" }, signal: { aborted: false } };
 	await exeWW(doomed, () => "ok");
 	check("esc: same-mode at workspace-write stripped", "sandbox_permissions" in doomed.arguments, false);
@@ -175,6 +188,9 @@ async function scenarioEscalation() {
 	const bare = { name: "bash", agent: { session: { id: "s" } }, arguments: { command: "ls", description: "L", sandbox_permissions: "danger-full-access" }, signal: { aborted: false } };
 	await listeners["tools/execute"](bare, () => "ok");
 	check("esc: no sandbox service mounted -> stripped", "sandbox_permissions" in bare.arguments, false);
+	const unknown = { name: "bash", agent: { session: { id: "s" } }, arguments: { command: "ls", description: "L", sandbox_permissions: "danger-full-access", justification: "need it" }, signal: { aborted: false } };
+	await listeners["tools/execute"](unknown, () => "ok");
+	check("esc: unknown policy preserves a valid request", unknown.arguments.sandbox_permissions, "danger-full-access");
 	const offCfg = makeCtx({ modelInfo: {}, standingMode: "danger-full-access" });
 	apply(offCfg, { stripEscalation: "off" });
 	const offExec = { name: "bash", agent: { session: { id: "s" } }, arguments: { command: "ls", description: "L", sandbox_permissions: "danger-full-access", justification: "x" }, signal: { aborted: false } };
@@ -196,7 +212,7 @@ async function scenarioEscalation() {
 async function scenarioCodeDiscipline() {
 	delete listeners["llm/stream"]; delete listeners["tools/execute"];
 	const ctx = makeCtx({ modelInfo: {} });
-	apply(ctx, {});
+	apply(ctx, { codeDiscipline: "auto" });
 	const llm = listeners["llm/stream"];
 	const emptyStream = () => (async function* () {})();
 	const drain = async (stream) => {
@@ -236,7 +252,7 @@ async function scenarioCodeDiscipline() {
 	check("disc: off never injects", codeOff.system, "BASE");
 	// openai-style tool entries detected
 	const oai = makeCtx({ modelInfo: {} });
-	apply(oai, {});
+	apply(oai, { codeDiscipline: "auto" });
 	const oaiOpts = { provider: "p", model: "m", system: "BASE", tools: [{ type: "function", function: { name: "run_code" } }] };
 	await drain(listeners["llm/stream"](oaiOpts, () => emptyStream()));
 	check("disc: openai-style run_code entry detected", oaiOpts.system.includes("compat-guard code-mode discipline"), true);

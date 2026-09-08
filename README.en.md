@@ -15,7 +15,7 @@ thinks heavily truncates and compaction aborts.
 
 **Fix**: intercepts `purpose === "compaction"` LLM requests on the `llm/stream` waterfall and
 
-- raises `maxTokens` to 32768 (configurable, clamped to the model's declared cap when known);
+- raises `maxTokens` to 32768 (configurable); clamps only when a provider explicitly exposes `hardMaxTokens`, never from DSH's `defaultMaxTokens`;
 - drops the reasoning effort to the cheapest level the model supports (prefer `off` > `minimal` > `low`);
 - never forces an effort on models without reasoning support (avoids `UNSUPPORTED_REASONING_EFFORT`).
 
@@ -69,7 +69,7 @@ Error: code run failed (exception): TypeError: b.stdout.slice is not a function
 
 **Fix**: the `llm/stream` hook detects code-mode requests (when `run_code` is the single wired tool) and appends a compact discipline block to the end of the system prompt: tool results are plain JSON values (no `.result()` wrapper), the correct bash result shapes, and closure hygiene for complete programs. Appending at the end keeps every provider prefix (and prompt cache) intact.
 
-`codeDiscipline`: `"auto"` (default — code-mode requests only) | `"always"` (every main-loop request) | `"off"`.
+`codeDiscipline`: `"off"` (default — use native AGENTS.md) | `"auto"` / `"always"` for legacy mutable request objects; frozen requests skip safely.
 
 ## Configuration (optional)
 
@@ -82,8 +82,12 @@ Error: code run failed (exception): TypeError: b.stdout.slice is not a function
   "compactionStripTools": false,
   "compactionPurposes": ["compaction"],
   "fillDescription": true,
-  "codeDiscipline": "auto",
+  "descriptionTools": ["bash", "run_code", "subagent", "subagent_fork", "workflow"],
+  "codeDiscipline": "off",
   "stripEscalation": "redundant",
+  "unknownPolicy": "preserve",
+  "modelInfoTtlMs": 300000,
+  "modelInfoTimeoutMs": 5000,
   "logFixes": true
 }
 ```
@@ -91,7 +95,7 @@ Error: code run failed (exception): TypeError: b.stdout.slice is not a function
 - `compactionEffort`: `"auto"` (cheapest level) | `"keep"` (leave untouched) | an explicit effort id.
 - `compactionStripTools`: when `true`, drops the tools list from compaction requests (prevents the model from calling
   tools mid-summary; costs the prefix KV cache).
-- `codeDiscipline`: `"auto"` (default — inject into code-mode requests only) | `"always"` (every main-loop request) | `"off"`.
+- `codeDiscipline`: `"off"` (default; native AGENTS.md is preferred) | `"auto"` | `"always"` for legacy mutable-request compatibility.
 - Same-named fields passed as cordis plugin config override the file.
 
 Apply config changes with `systemctl restart dsh-web` (or restart your `dsh web` process). Look for
@@ -102,7 +106,7 @@ Apply config changes with `systemctl restart dsh-web` (or restart your `dsh web`
 From the marketplace (Settings → Plugins → Marketplace, searchable as `dsh-model-compat-guard`) or directly:
 
 ```bash
-dsh plugin --profile web add github:782042369/dsh-model-compat-guard
+dsh plugin --profile web add github:782042369/dsh-model-compat-guard#v0.4.0
 ```
 
 Restart `dsh web` afterwards. Uninstall: `dsh plugin --profile web remove dsh-model-compat-guard`.
